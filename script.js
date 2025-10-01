@@ -1,260 +1,214 @@
-// data store
-let berkas = JSON.parse(localStorage.getItem("berkas")) || [];
-let pengurusData = JSON.parse(localStorage.getItem("pengurusData")) || [];
+document.addEventListener('DOMContentLoaded', () => {
+  // ELEMENTS
+  const bal = document.getElementById('currentBalance');
+  const inc = document.getElementById('totalIncome');
+  const exp = document.getElementById('totalExpense');
+  const hist = document.getElementById('transactionHistoryBody');
+  const recap = document.getElementById('monthlyRecapBody');
+  const monthSel = document.getElementById('monthSelector');
 
-const tbody = document.querySelector("#tabelBerkas tbody");
-const tbodyPengurus = document.querySelector("#tabelPengurus tbody");
-const rekapMinggu = document.getElementById("rekapMinggu");
-const rekapSelesai = document.getElementById("rekapSelesai");
-const pengurusSelect = document.getElementById("pengurus");
-let chart;
+  const inDate = document.getElementById('incomeDate');
+  const inAmt = document.getElementById('incomeAmount');
+  const inDesc = document.getElementById('incomeDescription');
+  const inCat = document.getElementById('incomeCategory');
+  const addIn = document.getElementById('addIncomeBtn');
 
-// helper: format tanggal (DD-MM-YYYY)
-function formatTanggal(tgl) {
-  if (!tgl) return "";
-  const d = new Date(tgl);
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}-${mm}-${yyyy}`;
-}
+  const exDate = document.getElementById('expenseDate');
+  const exAmt = document.getElementById('expenseAmount');
+  const exDesc = document.getElementById('expenseDescription');
+  const exCat = document.getElementById('expenseCategory');
+  const addEx = document.getElementById('addExpenseBtn');
 
-// helper: format rupiah (adds . as thousands)
-function formatRupiah(angka) {
-  return angka.replace(/\D/g, "").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-}
+  const btnXlsx = document.getElementById('exportExcelBtn');
+  const btnCsv = document.getElementById('exportCsvBtn');
 
-// init: apply rupiah formatter
-document.getElementById("jumlahPkb").addEventListener("input", function () {
-  this.value = formatRupiah(this.value);
-});
+  // Edit modal
+  const editTxMonth = document.getElementById('editTxMonth');
+  const editTxId = document.getElementById('editTxId');
+  const editType = document.getElementById('editType');
+  const editDate = document.getElementById('editDate');
+  const editAmount = document.getElementById('editAmount');
+  const editCategory = document.getElementById('editCategory');
+  const editDescription = document.getElementById('editDescription');
+  const saveEditBtn = document.getElementById('saveEditBtn');
 
-// when pengurus selection changes: set telp
-document.getElementById("pengurus").addEventListener("change", function () {
-  const pid = this.value;
-  if (!pid) {
-    document.getElementById("noTelp").value = "";
-    return;
+  let pie = null, bar = null;
+
+  // Helpers
+  function today(){ return new Date().toISOString().slice(0,10); }
+  inDate.value = today(); exDate.value = today();
+
+  function fmt(n){ return String(n||0).replace(/\B(?=(\d{3})+(?!\d))/g,'.'); }
+  function clean(s){ return parseInt(String(s).replace(/\D/g,'')) || 0; }
+  function mKeyFromDate(dateStr){ return dateStr ? dateStr.slice(0,7) : today().slice(0,7); }
+  function mLabel(k){ const [y,m]=k.split('-'); return new Date(`${y}-${m}-01`).toLocaleString('id-ID',{month:'long',year:'numeric'}); }
+
+  const STORE = 'catatan_keuangan_v2';
+
+  function load(){ return JSON.parse(localStorage.getItem(STORE)||'{}'); }
+  function save(d){ localStorage.setItem(STORE, JSON.stringify(d)); }
+
+  function ensureMonthExists(k){
+    const d=load();
+    if(!d[k]) d[k]={income:0,expense:0,tx:[]};
+    save(d); return d;
   }
-  const p = pengurusData.find(x => x.id === pid);
-  document.getElementById("noTelp").value = p ? p.telp : "";
-});
 
-// handle berkas form submit
-document.getElementById("berkasForm").addEventListener("submit", function (e) {
-  e.preventDefault();
-
-  const pengurusId = pengurus.value;
-  const pengurusObj = pengurusData.find(p => p.id === pengurusId) || {nama: pengurus.options[pengurus.selectedIndex]?.text || "", telp: document.getElementById("noTelp").value};
-
-  const data = {
-    id: Date.now().toString(),
-    tanggalMasuk: tanggalMasuk.value,
-    nrkb: nrkb.value,
-    namaPemilik: namaPemilik.value,
-    nomorRangka: nomorRangka.value,
-    noBpkb: noBpkb.value,
-    tanggalJatuhTempo: tanggalJatuhTempo.value,
-    jumlahPkb: jumlahPkb.value,
-    pengurusId: pengurusId || null,
-    pengurusNama: pengurusObj.nama,
-    pengurusTelp: pengurusObj.telp || document.getElementById("noTelp").value,
-    catatan: catatan.value,
-    proses: proses.value,
-    checklist: defaultChecklist(proses.value),
-    pengingat: Date.now() + 7 * 24 * 60 * 60 * 1000
-  };
-
-  berkas.push(data);
-  saveData();
-  this.reset();
-  // reset select to default
-  pengurusSelect.value = "";
-  document.getElementById("noTelp").value = "";
-});
-
-// default checklist by proses
-function defaultChecklist(proses) {
-  if (proses === "Perpanjangan STNK") return { stnk: false, tnkb: false };
-  if (proses === "Mutasi Keluar") return { selesai: false };
-  return { stnk: false, tnkb: false, bpkb: false };
-}
-
-// save to localStorage + re-render
-function saveData() {
-  localStorage.setItem("berkas", JSON.stringify(berkas));
-  localStorage.setItem("pengurusData", JSON.stringify(pengurusData));
-  renderTable();
-  renderPengurus();
-  updatePengurusSelect();
-  renderRekap();
-}
-
-// delete berkas
-function hapusData(i) {
-  if (confirm("Yakin ingin menghapus catatan ini?")) {
-    berkas.splice(i, 1);
-    saveData();
+  function refreshMonthSelector(){
+    const defaultKey=mKeyFromDate(today());
+    ensureMonthExists(defaultKey);
+    const d=load(), keys=Object.keys(d).sort();
+    monthSel.innerHTML='';
+    keys.forEach(k=>{
+      const o=document.createElement('option');
+      o.value=k; o.textContent=mLabel(k);
+      monthSel.appendChild(o);
+    });
+    if(keys.includes(defaultKey)) monthSel.value=defaultKey;
+    else if(keys.length) monthSel.value=keys[keys.length-1];
+    else { monthSel.value=defaultKey; }
   }
-}
 
-// delete pengurus
-function hapusPengurus(i) {
-  const p = pengurusData[i];
-  if (!p) return;
-  if (confirm(`Hapus pengurus "${p.nama}"? (catatan lama tetap menyimpan nama dan telepon)`)) {
-    pengurusData.splice(i, 1);
-    saveData();
+  function render(){
+    const d=load();
+    const k=monthSel.value||mKeyFromDate(today());
+    ensureMonthExists(k);
+    const m=d[k];
+    bal.textContent='Rp '+fmt(m.income-m.expense);
+    inc.textContent='Rp '+fmt(m.income);
+    exp.textContent='Rp '+fmt(m.expense);
+
+    // Riwayat
+    hist.innerHTML='';
+    if(m.tx.length===0){
+      hist.innerHTML='<tr><td colspan="6" class="text-center text-muted">Belum ada transaksi.</td></tr>';
+    } else {
+      m.tx.forEach((t,i)=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML=`
+          <td>${t.date}</td>
+          <td class="${t.type==='pemasukan'?'text-success':'text-danger'}">${t.type}</td>
+          <td>${t.cat}</td>
+          <td>${t.type==='pemasukan'?'+':'-'} Rp ${fmt(t.amt)}</td>
+          <td>${t.desc}</td>
+          <td>
+            <button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-id="${i}" data-month="${k}">Edit</button>
+            <button class="btn btn-sm btn-outline-danger" data-action="delete" data-id="${i}" data-month="${k}">Hapus</button>
+          </td>`;
+        hist.appendChild(tr);
+      });
+    }
+
+    // Rekap
+    recap.innerHTML='';
+    Object.keys(d).sort().forEach(kk=>{
+      const mm=d[kk], sal=mm.income-mm.expense;
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${mLabel(kk)}</td>
+        <td>Rp ${fmt(mm.income)}</td>
+        <td>Rp ${fmt(mm.expense)}</td>
+        <td>Rp ${fmt(sal)}</td>`;
+      recap.appendChild(tr);
+    });
+
+    // Charts
+    const cat={}; m.tx.forEach(t=>{if(t.type==='pengeluaran') cat[t.cat]=(cat[t.cat]||0)+t.amt;});
+    if(pie) pie.destroy();
+    pie=new Chart(document.getElementById('expenseCategoryChart'),{type:'pie',data:{labels:Object.keys(cat),datasets:[{data:Object.values(cat)}]}});
+    if(bar) bar.destroy();
+    const labs=Object.keys(d).sort();
+    bar=new Chart(document.getElementById('monthlyFlowChart'),{type:'bar',data:{labels:labs.map(mLabel),datasets:[
+      {label:'Pemasukan',data:labs.map(x=>d[x].income)},
+      {label:'Pengeluaran',data:labs.map(x=>d[x].expense)}
+    ]}});
   }
-}
 
-// render table berkas
-function renderTable() {
-  tbody.innerHTML = "";
-  if (berkas.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="14">Belum ada catatan</td></tr>`;
-    return;
+  function addTx(type,amt,desc,cat,date){
+    const k=mKeyFromDate(date);
+    const d=ensureMonthExists(k);
+    const full=load();
+    const tx={type,amt,desc,cat,date};
+    full[k].tx.push(tx);
+    if(type==='pemasukan') full[k].income+=amt; else full[k].expense+=amt;
+    save(full); refreshMonthSelector(); monthSel.value=k; render();
   }
-  berkas.forEach((b, i) => {
-    const checklistHTML = Object.keys(b.checklist)
-      .map((k) =>
-        `<div class="form-check form-check-inline">
-           <input type="checkbox" class="form-check-input" ${b.checklist[k] ? "checked" : ""} onchange="toggleChecklist('${b.id}', '${k}')">
-           <label class="form-check-label">${k.toUpperCase()}</label>
-         </div>`
-      ).join("");
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${i + 1}</td>
-      <td>${formatTanggal(b.tanggalMasuk)}</td>
-      <td>${b.nrkb}</td>
-      <td>${b.namaPemilik}</td>
-      <td>${b.noBpkb}</td>
-      <td>${b.nomorRangka}</td>
-      <td>${b.pengurusNama || "-"}</td>
-      <td>${b.pengurusTelp || "-"}</td>
-      <td>${b.proses}</td>
-      <td>${formatTanggal(b.tanggalJatuhTempo)}</td>
-      <td>Rp ${b.jumlahPkb}</td>
-      <td>${b.catatan || "-"}</td>
-      <td>${checklistHTML}</td>
-      <td>
-        <button class="btn btn-sm btn-danger" onclick="hapusData(${i})"><i class="fas fa-trash"></i></button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
 
-// render data master pengurus
-document.getElementById("pengurusForm").addEventListener("submit", function (e) {
-  e.preventDefault();
-  const nama = namaPengurus.value.trim();
-  const telp = telpPengurus.value.trim();
-  if (!nama || !telp) return alert("Isi nama dan telepon pengurus.");
-  const newP = { id: Date.now().toString(), nama, telp };
-  pengurusData.push(newP);
-  saveData();
-  this.reset();
-});
-
-// render pengurus table
-function renderPengurus() {
-  tbodyPengurus.innerHTML = "";
-  if (pengurusData.length === 0) {
-    tbodyPengurus.innerHTML = `<tr><td colspan="4">Belum ada data</td></tr>`;
-    return;
+  function updateTx(month,id,newTx){
+    const d=load();
+    const m=d[month]; if(!m) return;
+    const old=m.tx[id];
+    if(old.type==='pemasukan') m.income-=old.amt; else m.expense-=old.amt;
+    m.tx[id]=newTx;
+    if(newTx.type==='pemasukan') m.income+=newTx.amt; else m.expense+=newTx.amt;
+    save(d); render();
   }
-  pengurusData.forEach((p, i) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${i + 1}</td>
-      <td>${p.nama}</td>
-      <td>${p.telp}</td>
-      <td><button class="btn btn-sm btn-danger" onclick="hapusPengurus(${i})"><i class="fas fa-trash"></i></button></td>
-    `;
-    tbodyPengurus.appendChild(tr);
-  });
-}
 
-// update pengurus select (value=id; data-telp in option)
-function updatePengurusSelect() {
-  pengurusSelect.innerHTML = `<option value="">-- Pilih Pengurus --</option>`;
-  pengurusData.forEach((p) => {
-    const opt = document.createElement("option");
-    opt.value = p.id;
-    opt.textContent = `${p.nama} (${p.telp})`;
-    opt.dataset.telp = p.telp;
-    pengurusSelect.appendChild(opt);
-  });
-}
+  function deleteTx(month,id){
+    const d=load();
+    const m=d[month]; if(!m) return;
+    const old=m.tx[id];
+    if(old.type==='pemasukan') m.income-=old.amt; else m.expense-=old.amt;
+    m.tx.splice(id,1);
+    save(d); render();
+  }
 
-// toggle checklist by berkas id
-function toggleChecklist(berkasId, key) {
-  const idx = berkas.findIndex(b => b.id === berkasId);
-  if (idx === -1) return;
-  berkas[idx].checklist[key] = !berkas[idx].checklist[key];
-  saveData();
-}
+  // Formatter input
+  function attachFormatter(input){
+    if(!input) return;
+    input.addEventListener('input',()=>{
+      const val=clean(input.value);
+      input.value=val?fmt(val):'';
+    });
+  }
+  attachFormatter(inAmt); attachFormatter(exAmt); attachFormatter(editAmount);
 
-// render rekap dan chart
-function renderRekap() {
-  const mingguIni = berkas.filter(
-    (b) => new Date(b.tanggalMasuk) >= new Date(new Date().setDate(new Date().getDate() - 7))
-  ).length;
-  const selesai = berkas.filter((b) => Object.values(b.checklist).length > 0 && Object.values(b.checklist).every(v => v)).length;
+  // Handlers add
+  addIn.onclick=()=>{const a=clean(inAmt.value),desc=inDesc.value.trim(); if(!a||!desc) return alert('Isi pemasukan valid'); addTx('pemasukan',a,desc,inCat.value,inDate.value); inAmt.value=inDesc.value='';};
+  addEx.onclick=()=>{const a=clean(exAmt.value),desc=exDesc.value.trim(); if(!a||!desc) return alert('Isi pengeluaran valid'); addTx('pengeluaran',a,desc,exCat.value,exDate.value); exAmt.value=exDesc.value='';};
+  monthSel.onchange=render;
 
-  rekapMinggu.innerText = mingguIni;
-  rekapSelesai.innerText = selesai;
-
-  const prosesCount = {};
-  berkas.forEach((b) => {
-    prosesCount[b.proses] = (prosesCount[b.proses] || 0) + 1;
-  });
-  drawChart(prosesCount);
-}
-
-function drawChart(prosesCount) {
-  const ctx = document.getElementById("chartProses").getContext("2d");
-  if (chart) chart.destroy();
-  chart = new Chart(ctx, {
-    type: "pie",
-    data: {
-      labels: Object.keys(prosesCount),
-      datasets: [{ data: Object.values(prosesCount) }]
+  // Delegate edit/delete buttons
+  hist.addEventListener('click',e=>{
+    const btn=e.target.closest('button'); if(!btn) return;
+    const id=btn.dataset.id, month=btn.dataset.month;
+    const d=load(), tx=d[month].tx[id];
+    if(btn.dataset.action==='edit'){
+      editTxMonth.value=month;
+      editTxId.value=id;
+      editType.value=tx.type;
+      editDate.value=tx.date;
+      editAmount.value=fmt(tx.amt);
+      editCategory.value=tx.cat;
+      editDescription.value=tx.desc;
+      new bootstrap.Modal(document.getElementById('editModal')).show();
+    }
+    if(btn.dataset.action==='delete'){
+      if(confirm('Hapus transaksi ini?')) deleteTx(month,id);
     }
   });
-}
 
-// export ke excel (sheet lebih rapi)
-function exportExcel() {
-  // map data to friendly columns
-  const dataForExcel = berkas.map(b => ({
-    Tanggal: formatTanggal(b.tanggalMasuk),
-    NRKB: b.nrkb,
-    NamaPemilik: b.namaPemilik,
-    NoBPKB: b.noBpkb,
-    NoRangka: b.nomorRangka,
-    PengurusNama: b.pengurusNama,
-    PengurusTelp: b.pengurusTelp,
-    Proses: b.proses,
-    TglPKB: formatTanggal(b.tanggalJatuhTempo),
-    JumlahPKB: b.jumlahPkb,
-    Catatan: b.catatan
-  }));
-  const ws = XLSX.utils.json_to_sheet(dataForExcel);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Berkas");
-  XLSX.writeFile(wb, "berkas.xlsx");
-}
+  saveEditBtn.onclick=()=>{
+    const month=editTxMonth.value;
+    const id=editTxId.value;
+    const newTx={
+      type:editType.value,
+      date:editDate.value,
+      amt:clean(editAmount.value),
+      cat:editCategory.value.trim(),
+      desc:editDescription.value.trim()
+    };
+    if(!newTx.amt||!newTx.desc) return alert('Isi data edit dengan benar');
+    updateTx(month,id,newTx);
+    bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
+  };
 
-// show belum selesai (alert simple)
-function showBelumSelesai() {
-  const belum = berkas.filter(b => !(Object.values(b.checklist).length && Object.values(b.checklist).every(v => v)));
-  if (belum.length === 0) return alert("Semua berkas telah selesai.");
-  const list = belum.map(b => `${formatTanggal(b.tanggalMasuk)} - ${b.nrkb} - ${b.namaPemilik} (${b.proses})`).join("\n");
-  alert(`Berkas belum selesai:\n\n${list}`);
-}
+  // Export
+  btnCsv.onclick=()=>{const d=load(),rows=[['Bulan','Tanggal','Jenis','Kategori','Jumlah','Deskripsi']]; Object.keys(d).forEach(k=>d[k].tx.forEach(t=>rows.push([mLabel(k),t.date,t.type,t.cat,t.amt,t.desc]))); const csv=rows.map(r=>r.join(',')).join('\n'); const blob=new Blob([csv],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='keuangan.csv'; a.click();};
+  btnXlsx.onclick=()=>{const d=load(),rows=[['Bulan','Tanggal','Jenis','Kategori','Jumlah','Deskripsi']]; Object.keys(d).forEach(k=>d[k].tx.forEach(t=>rows.push([mLabel(k),t.date,t.type,t.cat,t.amt,t.desc]))); const wb=XLSX.utils.book_new(); const ws=XLSX.utils.aoa_to_sheet(rows); XLSX.utils.book_append_sheet(wb,ws,'Data'); XLSX.writeFile(wb,'keuangan.xlsx');};
 
-// initial render
-saveData();
+  // Init
+  refreshMonthSelector(); render();
+
+  // register service worker
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('service-worker.js');
+});
